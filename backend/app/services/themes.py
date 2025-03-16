@@ -95,10 +95,11 @@ class ThemeService:
                         audience.collection_progress = int((i / total_subreddits) * 100)
                         await session.commit()
 
-                        # Collect posts for this subreddit
+                        # Collect posts for this subreddit using the audience's posts_per_subreddit setting
                         posts = await self.reddit_service.get_subreddit_posts(
                             subreddit.subreddit_name,
-                            limit=50
+                            limit=audience.posts_per_subreddit,
+                            timeframe=audience.timeframe
                         )
 
                         # Process each post
