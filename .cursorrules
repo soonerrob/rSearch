@@ -1,0 +1,190 @@
+You are an expert in full-stack development specializing in Python FastAPI for backend and React/Next.js with modern UI frameworks for frontend.
+
+# BACKEND DEVELOPMENT - FASTAPI
+
+Key Principles (Backend)
+- Write concise, technical responses with accurate Python examples.
+- Use functional, declarative programming; avoid classes where possible except when necessary.
+- Prefer iteration and modularization over code duplication.
+- Use descriptive variable names with auxiliary verbs (e.g., is_active, has_permission).
+- Use lowercase with underscores for directories and files (e.g., routers/user_routes.py).
+- Favor named exports for routes and utility functions.
+- Use the Receive an Object, Return an Object (RORO) pattern.
+
+Python/FastAPI Implementation
+- Use def for pure functions and async def for asynchronous operations.
+- Use type hints for all function signatures. Prefer Pydantic models over raw dictionaries for input validation.
+- File structure: exported router, sub-routes, utilities, static content, types (models, schemas).
+- Avoid unnecessary curly braces in conditional statements.
+- For single-line statements in conditionals, omit curly braces.
+- Use concise, one-line syntax for simple conditional statements (e.g., if condition: do_something()).
+
+FastAPI-Specific Guidelines
+- Use functional components (plain functions) and Pydantic models for input validation and response schemas.
+- Use declarative route definitions with clear return type annotations.
+- Use def for synchronous operations and async def for asynchronous ones.
+- Minimize @app.on_event("startup") and @app.on_event("shutdown"); prefer lifespan context managers for managing startup and shutdown events.
+- Use middleware for logging, error monitoring, and performance optimization.
+- Optimize for performance using async functions for I/O-bound tasks, caching strategies, and lazy loading.
+- Use HTTPException for expected errors and model them as specific HTTP responses.
+- Use middleware for handling unexpected errors, logging, and error monitoring.
+- Use Pydantic's BaseModel for consistent input/output validation and response schemas.
+
+Backend Error Handling and Validation
+- Prioritize error handling and edge cases:
+  - Handle errors and edge cases at the beginning of functions.
+  - Use early returns for error conditions to avoid deeply nested if statements.
+  - Place the happy path last in the function for improved readability.
+  - Avoid unnecessary else statements; use the if-return pattern instead.
+  - Use guard clauses to handle preconditions and invalid states early.
+  - Implement proper error logging and user-friendly error messages.
+  - Use custom error types or error factories for consistent error handling.
+
+Backend Dependencies
+- FastAPI
+- Pydantic v2
+- Async database libraries like asyncpg or aiomysql
+- SQLAlchemy 2.0 (if using ORM features)
+
+Backend Performance Optimization
+- Minimize blocking I/O operations; use asynchronous operations for all database calls and external API requests.
+- Implement caching for static and frequently accessed data using tools like Redis or in-memory stores.
+- Optimize data serialization and deserialization with Pydantic.
+- Use lazy loading techniques for large datasets and substantial API responses.
+
+Backend Key Conventions
+1. Rely on FastAPI's dependency injection system for managing state and shared resources.
+2. Prioritize API performance metrics (response time, latency, throughput).
+3. Limit blocking operations in routes:
+   - Favor asynchronous and non-blocking flows.
+   - Use dedicated async functions for database and external API operations.
+   - Structure routes and dependencies clearly to optimize readability and maintainability.
+
+# FRONTEND DEVELOPMENT - REACT/NEXT.JS
+
+Key Principles (Frontend)
+- Follow the user's requirements carefully and to the letter.
+- Always use a step-by-step approach - describe your plan in pseudocode before implementation.
+- Write correct, best practice, DRY principle code that is bug-free and fully functional.
+- Focus on readability and maintainability over excessive optimization.
+- Fully implement all requested functionality without TODOs or placeholders.
+- Include all required imports and ensure proper naming of components.
+- Be concise and minimize unnecessary prose.
+
+Frontend Technologies
+- ReactJS/NextJS as the primary framework
+- TypeScript for type safety
+- TailwindCSS for styling
+- Modern UI component libraries (Shadcn, Radix)
+- HTML/CSS fundamentals
+
+Frontend Code Implementation Guidelines
+- Use early returns whenever possible to improve readability.
+- Always use Tailwind classes for styling; avoid raw CSS or inline styles.
+- Use "class:" instead of ternary operators in class attributes when possible.
+- Use descriptive variable and function names with proper prefixes (e.g., "handle" for event handlers).
+- Implement accessibility features on all interactive elements (tabindex, aria-labels, keyboard handlers).
+- Prefer const arrow functions over traditional function declarations.
+- Define TypeScript types/interfaces for all data structures and component props.
+
+# FULL-STACK INTEGRATION
+
+API Integration
+- Design consistent API contracts between FastAPI backends and React frontends.
+- Use Pydantic models that align with TypeScript interfaces for type consistency across stack.
+- Implement proper error handling on both ends - backend exceptions to frontend error states.
+- Utilize React Query/SWR for efficient API state management and caching on the frontend.
+
+Authentication & Authorization
+- Implement JWT or OAuth2 authentication in FastAPI with secure frontend storage.
+- Create protected routes in both backend (FastAPI dependencies) and frontend (route guards).
+- Handle token refresh and session management across the stack.
+
+Data Flow
+- Establish clear data flow patterns between backend and frontend.
+- Use React state management solutions (Context, Redux) that complement FastAPI's data structures.
+- Implement optimistic UI updates with proper error fallbacks.
+
+Performance Considerations
+- Coordinate backend and frontend caching strategies.
+- Implement proper loading states and skeleton screens during async operations.
+- Use pagination, virtualization, and lazy loading consistently across stack.
+- Balance between server-side and client-side rendering based on use case.
+
+Development Workflow
+- Establish consistent error handling patterns across the full stack.
+- Use TypeScript and Pydantic for end-to-end type safety.
+- Implement comprehensive testing across both layers (backend and frontend).
+- Use Docker for consistent development and deployment environments.
+
+Refer to FastAPI and React/Next.js documentation for detailed implementation guidelines and best practices.
+
+Always install dependencies into the venv
+Every time you give a terminal command to run, check the terminal to make sure there are no errors.
+
+Always assume the frontend and backend servers are running so they will need to be killed before started.
+
+# TERMINAL COMMAND EXECUTION
+1. For EVERY terminal command:
+   - Always check the complete terminal output after execution
+   - Parse the entire error stack if errors occur
+   - Never proceed until confirming command succeeded
+   - If errors occur, fix them before moving on
+   - Never assume a command succeeded without verifying output
+
+2. When running servers:
+   - Verify server actually started successfully
+   - Check for startup errors in logs
+   - Confirm all database migrations completed
+   - Don't proceed until server is fully running
+
+# Error Handling and Dependency Management
+1. When making changes that affect multiple files:
+   - Trace and verify the FULL dependency chain (imports, references)
+   - Check each file in the import chain from bottom to top
+   - Fix root causes, not just symptoms
+
+2. When database models are involved:
+   - Verify table names match exactly between models
+   - Check all foreign key references
+   - Ensure referenced tables exist
+   - Verify relationship back-populates match
+
+3. When errors appear in terminal:
+   - Read the ENTIRE error stack trace from bottom to top
+   - Check each file mentioned in the trace
+   - Look for root cause errors (last error in stack)
+   - Fix foundational issues before surface ones
+
+4. Before running terminal commands:
+   - Verify all dependent code changes are complete
+   - Check for circular dependencies
+   - Ensure database migrations are in correct order
+   - Verify table names and references
+
+# Server Management Rules
+1. Always kill existing server processes before starting new ones:
+   - First try gentle shutdown: pkill -f "uvicorn main:app" && pkill -f "next"
+   - If processes persist, try force: pkill -9 -f "uvicorn" && pkill -9 -f "next"
+   - If processes still persist, use sudo: sudo pkill -9 -f "python" && sudo pkill -9 -f "uvicorn"
+   - ALWAYS verify processes are killed: ps aux | grep -E "python|uvicorn|next"
+   - Look for background workers and child processes
+   - Wait at least 2 seconds after killing before starting new servers
+
+2. Server Start Commands:
+   Backend: cd backend && uvicorn app.main:app --reload --port 8001
+   Frontend: cd frontend && npm run dev
+
+3. Server Health Checks:
+   - Verify backend is not running: ps aux | grep -E "python|uvicorn"
+   - Verify frontend is not running: ps aux | grep next
+   - Check ports 3000 (frontend) and 8001 (backend) are free
+   - Check for zombie processes: ps aux | grep defunct
+   - Monitor system logs for crashed processes
+
+4. Error Recovery:
+   - If normal kill commands fail, use sudo pkill -9
+   - Always check process status after kill commands
+   - Check for hung database connections
+   - Verify all child processes are terminated
+   - Wait a few seconds after killing before starting new servers
