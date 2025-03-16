@@ -38,17 +38,8 @@ This site is an audience research tool designed to gather insights about buyer i
    - Question history tracking and persistence
    - Theme-specific question management
 
-## Current Project Status
 
-The project is undergoing a major migration from PRAW to AsyncPRAW. This migration was necessitated by the realization that the original implementation wasn't built on an asynchronous platform, limiting scalability and performance.
 
-### Migration Challenges
-- Previous developer initiated migration but left mid-project
-- Multiple changes were implemented but not fully documented
-- Currently working to stabilize and complete the migration
-- Using testing_plan.md and test_results as primary guidelines
-- Addressing time_filter validation issues in post collection
-- Implementing proper cascade deletion for audiences
 
 ## Technical Implementation
 
