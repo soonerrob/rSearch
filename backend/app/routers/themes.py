@@ -98,3 +98,37 @@ async def request_theme_refresh(
     except Exception as e:
         logger.error(f"Error in request_theme_refresh: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/audience/{audience_id}/analyze-posts")
+async def analyze_audience_posts(
+    audience_id: int,
+    db: AsyncSession = Depends(get_db_session)
+):
+    """Analyze all posts for an audience to generate theme matches."""
+    try:
+        # First check if the audience exists
+        result = await db.execute(select(Audience).where(Audience.id == audience_id))
+        audience = result.scalar_one_or_none()
+        if not audience:
+            raise HTTPException(status_code=404, detail="Audience not found")
+            
+        if audience.is_collecting:
+            raise HTTPException(
+                status_code=202,
+                detail="Initial data collection is in progress. Please wait."
+            )
+        
+        # Analyze posts
+        theme_service = ThemeService(db)
+        try:
+            await theme_service.analyze_posts(audience_id)
+            return {"message": "Posts analyzed successfully"}
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error analyzing posts: {str(e)}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

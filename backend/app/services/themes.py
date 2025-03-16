@@ -1,16 +1,23 @@
+import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.core.logger import get_logger
-from app.models import Audience, RedditPost, Theme, ThemePost, ThemeQuestion
+from app.models.audience import Audience, AudienceSubreddit
+from app.models.post_analysis import PostAnalysis
+from app.models.reddit_post import RedditPost
+from app.models.theme import Theme, ThemePost
+from app.models.theme_question import ThemeQuestion
 from app.services.reddit import RedditService
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 from sqlmodel import and_, delete, select, text
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 class ThemeService:
     def __init__(self, db=None):
@@ -18,76 +25,106 @@ class ThemeService:
         self.db = db
         self.settings = get_settings()
         self.reddit_service = RedditService(self.db)
+        
+        # Define theme categories and their keywords
+        self.theme_categories = {
+            "Hot Discussions": {
+                "criteria": lambda p: p.score > 10 and p.num_comments > 5,
+                "keywords": []  # No keywords needed, based on metrics
+            },
+            "Top Content": {
+                "criteria": lambda p: True,  # All posts eligible, sorted by score
+                "keywords": []  # No keywords needed, based on metrics
+            },
+            "Advice Requests": {
+                "keywords": ["advice", "help", "question", "how do", "how to", "need help", "beginner", "learning", "technique", "tips", "practice"]
+            },
+            "Solution Requests": {
+                "keywords": ["looking for", "recommend", "suggestion", "alternative", "which", "vs", "or", "setup", "kit", "pedal", "cymbal", "snare"]
+            },
+            "Pain & Anger": {
+                "keywords": ["frustrated", "angry", "annoyed", "hate", "problem", "issue", "broken", "noise", "loud", "neighbor", "complaint"]
+            },
+            "Money Talk": {
+                "keywords": ["price", "cost", "money", "paid", "expensive", "cheap", "worth", "budget", "deal", "sale", "used", "new"]
+            },
+            "Self-Promotion": {
+                "keywords": ["i made", "my project", "check out", "launching", "just released", "my band", "my cover", "my setup", "my kit", "nfd", "new drum day"]
+            },
+            "News": {
+                "keywords": ["news", "announcement", "update", "release", "launched", "tour", "concert", "show", "performance", "competition"]
+            },
+            "Ideas": {
+                "keywords": ["idea", "creative", "inspiration", "groove", "fill", "pattern", "style", "sound", "tone", "tuning"]
+            },
+            "Opportunities": {
+                "keywords": ["opportunity", "job", "gig", "audition", "looking for drummer", "band", "project", "collaboration", "session", "studio"]
+            }
+        }
 
     async def collect_posts_for_audience(self, audience_id: int, is_initial_collection: bool = False) -> None:
         """Collect posts for an audience."""
         try:
-            # Create a new async session for this background task
             async with AsyncSessionLocal() as session:
-                # Query audience with eager loading of subreddits
-                result = await session.execute(
-                    select(Audience)
-                    .options(joinedload(Audience.subreddits))
-                    .where(Audience.id == audience_id)
-                )
-                
-                # Use unique() to handle the joined load and get a single result
-                audience = result.unique().scalar_one_or_none()
-                if not audience:
-                    logger.error(f"Audience {audience_id} not found")
-                    return
-
-                # Store subreddit names to avoid accessing relationship after session close
-                subreddit_names = [s.subreddit_name for s in audience.subreddits]
-                total_subreddits = len(subreddit_names)
-                
-                if total_subreddits == 0:
-                    logger.warning(f"No subreddits found for audience {audience_id}")
-                    return
-
-                # Update collection status
-                audience.is_collecting = True
-                audience.collection_progress = 0
-                await session.commit()
-
                 try:
-                    # Process each subreddit
-                    for idx, subreddit_name in enumerate(subreddit_names, 1):
-                        logger.info(f"Collecting posts for subreddit {subreddit_name}")
-                        
-                        # Get posts from Reddit
+                    # Get audience
+                    result = await session.execute(
+                        select(Audience).where(Audience.id == audience_id)
+                    )
+                    audience = result.scalar_one_or_none()
+                    if not audience:
+                        raise ValueError(f"Audience with id {audience_id} not found")
+
+                    # Mark collection as started
+                    audience.is_collecting = True
+                    audience.collection_progress = 0
+                    await session.commit()
+
+                    # Get subreddits for this audience
+                    result = await session.execute(
+                        select(AudienceSubreddit).where(AudienceSubreddit.audience_id == audience_id)
+                    )
+                    subreddits = result.scalars().all()
+
+                    total_subreddits = len(subreddits)
+                    if total_subreddits == 0:
+                        raise ValueError("No subreddits found for this audience")
+
+                    for i, subreddit in enumerate(subreddits, 1):
+                        # Update progress
+                        audience.collection_progress = int((i / total_subreddits) * 100)
+                        await session.commit()
+
+                        # Collect posts for this subreddit
                         posts = await self.reddit_service.get_subreddit_posts(
-                            subreddit_name,
-                            limit=audience.posts_per_subreddit,
-                            timeframe=audience.timeframe
+                            subreddit.subreddit_name,
+                            limit=50
                         )
-                        
+
                         # Process each post
                         for post in posts:
                             # Check if post exists
-                            existing_post = await session.execute(
+                            result = await session.execute(
                                 select(RedditPost).where(RedditPost.reddit_id == post.reddit_id)
                             )
-                            existing_post = existing_post.scalar_one_or_none()
+                            existing_post = result.scalar_one_or_none()
                             
-                            if existing_post:
-                                # Update existing post with new data
-                                existing_post.title = post.title
-                                existing_post.content = post.content
-                                existing_post.author = post.author
-                                existing_post.score = post.score
-                                existing_post.num_comments = post.num_comments
-                                existing_post.collected_at = post.collected_at
-                            else:
-                                # Create new post
+                            if not existing_post:
+                                # Add new post
                                 session.add(post)
-                            
-                            # Commit in batches to avoid memory issues
-                            if idx % 100 == 0:
                                 await session.commit()
-                        
-                        # Update progress
-                        audience.collection_progress = (idx / total_subreddits) * 100
+                                await session.refresh(post)
+                                
+                                # Analyze the post
+                                await self._analyze_post(post)
+                            else:
+                                # Update existing post, excluding the ID field
+                                post_dict = post.dict()
+                                post_dict.pop('id', None)  # Remove ID if present
+                                for key, value in post_dict.items():
+                                    setattr(existing_post, key, value)
+                                await session.commit()
+
                         await session.commit()
 
                     # Mark collection as complete
@@ -96,7 +133,7 @@ class ThemeService:
                     await session.commit()
                     
                     if is_initial_collection:
-                        # Analyze themes after initial collection
+                        # Generate themes after initial collection
                         await self.analyze_themes(audience_id)
 
                 except Exception as e:
@@ -117,69 +154,121 @@ class ThemeService:
             logger.error(f"Error in collect_posts_for_audience: {str(e)}")
             raise
 
+    async def _analyze_post(self, post: RedditPost) -> None:
+        """Analyze a post and store its analysis results."""
+        # Check if already analyzed
+        result = await self.db.execute(
+            select(PostAnalysis).where(PostAnalysis.post_id == post.id)
+        )
+        if result.scalar_one_or_none():
+            return
+
+        # Find matching themes
+        matching_themes = []
+        text_content = (post.title + " " + post.content).lower()
+        
+        # Check each theme category
+        for category, config in self.theme_categories.items():
+            # For metric-based themes (Hot Discussions, Top Content)
+            if "criteria" in config and config["criteria"](post):
+                matching_themes.append(category)
+            
+            # For keyword-based themes
+            if "keywords" in config and any(k in text_content for k in config["keywords"]):
+                matching_themes.append(category)
+
+        # Extract keywords (simple implementation for now)
+        keywords = []
+        for category, config in self.theme_categories.items():
+            if "keywords" in config:
+                keywords.extend([k for k in config["keywords"] if k in text_content])
+        keywords = list(set(keywords))  # Remove duplicates
+
+        # Store analysis
+        analysis = PostAnalysis(
+            post_id=post.id,
+            matching_themes=matching_themes,
+            keywords=keywords
+        )
+        self.db.add(analysis)
+        await self.db.commit()
+
     async def analyze_themes(self, audience_id: int) -> List[Theme]:
-        """Analyze posts and generate themes for an audience."""
+        """Generate themes from analyzed posts."""
         if not self.db:
             raise ValueError("Database session not initialized")
 
         try:
-            # Get recent posts for the audience
+            # Get recent posts with their analysis
             posts = await self._get_recent_posts(audience_id)
             
             if not posts:
-                raise ValueError("No posts found for this audience. Please ensure the audience has subreddits and posts have been collected.")
+                raise ValueError("No posts found for this audience")
             
-            # Define theme categories
-            theme_categories = {
-                "Hot Discussions": self._analyze_hot_discussions,
-                "Top Content": self._analyze_top_content,
-                "Advice Requests": self._analyze_advice_requests,
-                "Solution Requests": self._analyze_solution_requests,
-                "Pain & Anger": self._analyze_pain_and_anger,
-                "Money Talk": self._analyze_money_talk,
-                "Self-Promotion": self._analyze_self_promotion,
-                "News": self._analyze_news,
-                "Ideas": self._analyze_ideas,
-                "Opportunities": self._analyze_opportunities
-            }
+            # Get post analyses
+            post_ids = [p.id for p in posts]
+            result = await self.db.execute(
+                select(PostAnalysis).where(PostAnalysis.post_id.in_(post_ids))
+            )
+            analyses = result.scalars().all()
+            
+            # Create a map of post_id to analysis
+            post_analysis_map = {a.post_id: a for a in analyses}
+            
+            # Group posts by themes
+            theme_groups = defaultdict(list)
+            for post in posts:
+                analysis = post_analysis_map.get(post.id)
+                if analysis:
+                    for theme in analysis.matching_themes:
+                        theme_groups[theme].append(post)
+            
+            # Sort "Hot Discussions" and "Top Content" by metrics
+            if "Hot Discussions" in theme_groups:
+                theme_groups["Hot Discussions"] = sorted(
+                    theme_groups["Hot Discussions"],
+                    key=lambda p: p.score + p.num_comments,
+                    reverse=True
+                )[:10]
+            
+            if "Top Content" in theme_groups:
+                theme_groups["Top Content"] = sorted(
+                    theme_groups["Top Content"],
+                    key=lambda p: p.score,
+                    reverse=True
+                )[:10]
 
             # Generate themes
             themes = []
-            for category, analyzer in theme_categories.items():
-                try:
-                    relevant_posts = analyzer(posts)
-                    if relevant_posts:
-                        theme = Theme(
-                            audience_id=audience_id,
-                            category=category,
-                            summary=self._generate_theme_summary(category, relevant_posts),
-                            created_at=datetime.utcnow(),
-                            updated_at=datetime.utcnow()
-                        )
-                        self.db.add(theme)
-                        await self.db.commit()
-                        await self.db.refresh(theme)
+            for category, posts in theme_groups.items():
+                if posts:  # Only create theme if there are matching posts
+                    theme = Theme(
+                        audience_id=audience_id,
+                        category=category,
+                        summary=self._generate_theme_summary(category, posts),
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow()
+                    )
+                    self.db.add(theme)
+                    await self.db.commit()
+                    await self.db.refresh(theme)
 
-                        # Create theme-post associations
-                        theme_posts = []
-                        for post in relevant_posts:
-                            theme_post = ThemePost(
-                                theme_id=theme.id,
-                                post_id=post.id,
-                                relevance_score=self._calculate_relevance_score(post, category)
-                            )
-                            theme_posts.append(theme_post)
-                        
-                        # Bulk insert theme posts
-                        if theme_posts:
-                            self.db.add_all(theme_posts)
-                            await self.db.commit()
-                        
-                        themes.append(theme)
-                except Exception as e:
-                    logger.error(f"Error analyzing theme category {category}: {str(e)}")
-                    await self.db.rollback()
-                    continue
+                    # Create theme-post associations
+                    theme_posts = []
+                    for post in posts:
+                        theme_post = ThemePost(
+                            theme_id=theme.id,
+                            post_id=post.id,
+                            relevance_score=self._calculate_relevance_score(post, category)
+                        )
+                        theme_posts.append(theme_post)
+                    
+                    # Bulk insert theme posts
+                    if theme_posts:
+                        self.db.add_all(theme_posts)
+                        await self.db.commit()
+                    
+                    themes.append(theme)
 
             if not themes:
                 raise ValueError("No themes could be generated from the available posts")
@@ -266,59 +355,6 @@ class ThemeService:
         # TODO: Implement more sophisticated scoring
         base_score = post.score + post.num_comments
         return min(1.0, base_score / 1000)  # Normalize to 0-1
-
-    # Theme analysis methods
-    def _analyze_hot_discussions(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify hot discussions based on recent engagement."""
-        return sorted(
-            [p for p in posts if p.score > 10 and p.num_comments > 5],
-            key=lambda p: p.score + p.num_comments,
-            reverse=True
-        )[:10]
-
-    def _analyze_top_content(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify top performing content."""
-        return sorted(posts, key=lambda p: p.score, reverse=True)[:10]
-
-    def _analyze_advice_requests(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify posts seeking advice."""
-        keywords = ["advice", "help", "question", "how do", "how to", "need help", "beginner", "learning", "technique", "tips", "practice"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
-
-    def _analyze_solution_requests(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify posts seeking specific solutions."""
-        keywords = ["looking for", "recommend", "suggestion", "alternative", "which", "vs", "or", "setup", "kit", "pedal", "cymbal", "snare"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
-
-    def _analyze_pain_and_anger(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify posts expressing frustration or problems."""
-        keywords = ["frustrated", "angry", "annoyed", "hate", "problem", "issue", "broken", "noise", "loud", "neighbor", "complaint"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
-
-    def _analyze_money_talk(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify posts discussing financial aspects."""
-        keywords = ["price", "cost", "money", "paid", "expensive", "cheap", "worth", "budget", "deal", "sale", "used", "new"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
-
-    def _analyze_self_promotion(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify self-promotional posts."""
-        keywords = ["i made", "my project", "check out", "launching", "just released", "my band", "my cover", "my setup", "my kit", "nfd", "new drum day"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
-
-    def _analyze_news(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify news and announcements."""
-        keywords = ["news", "announcement", "update", "release", "launched", "tour", "concert", "show", "performance", "competition"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
-
-    def _analyze_ideas(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify posts about ideas and creativity."""
-        keywords = ["idea", "creative", "inspiration", "groove", "fill", "pattern", "style", "sound", "tone", "tuning"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
-
-    def _analyze_opportunities(self, posts: List[RedditPost]) -> List[RedditPost]:
-        """Identify posts about opportunities."""
-        keywords = ["opportunity", "job", "gig", "audition", "looking for drummer", "band", "project", "collaboration", "session", "studio"]
-        return [p for p in posts if any(k in p.title.lower() or k in p.content.lower() for k in keywords)]
 
     async def refresh_themes(self, audience_id: int) -> None:
         """Task to refresh themes for an audience."""
@@ -546,4 +582,24 @@ class ThemeService:
         return {
             'time_periods': time_periods,
             'total_periods': len(time_periods)
-        } 
+        }
+
+    async def analyze_posts(self, audience_id: int) -> None:
+        """Analyze all posts for an audience."""
+        if not self.db:
+            raise ValueError("Database session not initialized")
+
+        try:
+            # Get recent posts
+            posts = await self._get_recent_posts(audience_id)
+            
+            if not posts:
+                raise ValueError("No posts found for this audience")
+            
+            # Analyze each post
+            for post in posts:
+                await self._analyze_post(post)
+                
+        except Exception as e:
+            logger.error(f"Error analyzing posts: {str(e)}")
+            raise 

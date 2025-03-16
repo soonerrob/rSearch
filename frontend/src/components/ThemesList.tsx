@@ -23,7 +23,6 @@ import ThemePanel from './themes/ThemePanel';
 
 interface ThemesListProps {
   audienceId: number;
-  refreshing?: boolean;
 }
 
 const THEME_ICONS: Record<string, LucideIcon> = {
@@ -39,7 +38,7 @@ const THEME_ICONS: Record<string, LucideIcon> = {
   'Opportunities': Target
 };
 
-export function ThemesList({ audienceId, refreshing = false }: ThemesListProps) {
+export function ThemesList({ audienceId }: ThemesListProps) {
   const [themes, setThemes] = useState<Theme[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +140,7 @@ export function ThemesList({ audienceId, refreshing = false }: ThemesListProps) 
         clearInterval(interval);
       }
     };
-  }, [audienceId, refreshing, isCollecting]);
+  }, [audienceId, isCollecting]);
 
   if (error) {
     return (
@@ -167,7 +166,7 @@ export function ThemesList({ audienceId, refreshing = false }: ThemesListProps) 
         <h2 className="text-xl font-semibold">Themes</h2>
       </div>
 
-      {(loading || refreshing) && <div className="text-center p-4">Loading themes...</div>}
+      {(loading || isCollecting) && <div className="text-center p-4">Loading themes...</div>}
 
       {/* Scoring-based themes section */}
       <div className="mb-8">
