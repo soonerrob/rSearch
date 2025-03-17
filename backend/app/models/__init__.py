@@ -1,6 +1,7 @@
 from sqlmodel import SQLModel
 
 from .audience import Audience, AudienceSubreddit
+from .comment import Comment
 from .post_analysis import PostAnalysis
 from .reddit_post import RedditPost
 from .subreddit import Subreddit
@@ -16,5 +17,6 @@ __all__ = [
     "Theme",
     "ThemePost",
     "ThemeQuestion",
-    "PostAnalysis"
+    "PostAnalysis",
+    "Comment"
 ] 

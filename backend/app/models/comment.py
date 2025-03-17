@@ -1,53 +1,55 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
+from sqlalchemy import (ARRAY, JSON, Boolean, Column, DateTime, Float,
+                        ForeignKey, Integer, String)
+from sqlalchemy.orm import foreign
 from sqlmodel import Field, Relationship, SQLModel
 
-from .base import TimestampedBase
+from .reddit_post import RedditPost
 
 
-class Comment(TimestampedBase, table=True):
-    """Model for storing Reddit comments with smart filtering for AI analysis"""
+class Comment(SQLModel, table=True):
     __tablename__ = "comments"
-
-    id: Optional[int] = Field(default=None, primary_key=True)
+    
+    id: Optional[int] = Field(default=None, sa_column=Column(Integer, primary_key=True))
     reddit_id: str = Field(unique=True, index=True)
+    post_id: int = Field(sa_column=Column(Integer, ForeignKey("redditpost.id", ondelete="CASCADE")))
+    parent_id: Optional[int] = Field(default=None, sa_column=Column(Integer, ForeignKey("comments.id")))
     content: str
     author: str
-    score: int = Field(default=0)
+    score: int = Field(default=0, ge=0)
+    depth: int = Field(default=0, ge=0)
+    path: List[int] = Field(sa_column=Column(ARRAY(Integer), server_default="{}"))
+    is_submitter: bool = Field(default=False)
+    distinguished: Optional[str] = Field(default=None)
+    stickied: bool = Field(default=False)
+    awards: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    edited: bool = Field(default=False)
+    engagement_score: float = Field(default=0.0)
+    created_at: datetime = Field(sa_column=Column(DateTime(timezone=True)))
+    collected_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     
-    # Hierarchy tracking
-    parent_id: Optional[str] = Field(default=None, index=True)  # reddit_id of parent comment
-    level: int = Field(default=0)  # 0 for top-level comments
-    
-    # Metrics
-    awards_received: int = Field(default=0)
-    is_edited: bool = Field(default=False)
-    
-    # Collection metadata
-    collected_at: datetime = Field(default_factory=datetime.utcnow)
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    # Temporary field to store Reddit parent ID during collection
+    reddit_parent_id: Optional[str] = Field(default=None, exclude=True)
     
     # Relationships
-    post_id: int = Field(foreign_key="posts.id")
-    post: "Post" = Relationship(back_populates="comments")
-    
-    # Hierarchy relationships
-    parent_comment_id: Optional[int] = Field(default=None, foreign_key="comments.id")
-    replies: List["Comment"] = Relationship(
-        back_populates="parent"
-    )
+    post: RedditPost = Relationship(back_populates="comments")
     parent: Optional["Comment"] = Relationship(
         back_populates="replies",
         sa_relationship_kwargs={
-            "remote_side": "Comment.id",
-            "cascade": "all, delete-orphan",
-            "single_parent": True
+            "remote_side": "Comment.id"
+        }
+    )
+    replies: List["Comment"] = Relationship(
+        back_populates="parent",
+        sa_relationship_kwargs={
+            "cascade": "all, delete-orphan"
         }
     )
 
-    def __repr__(self) -> str:
-        return f"<Comment {self.reddit_id}>"
-
-    class Config:
-        from_attributes = True 
+    def __repr__(self):
+        return f"<Comment {self.reddit_id}>" 

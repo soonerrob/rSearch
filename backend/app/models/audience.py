@@ -1,7 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlmodel import Column, Field, ForeignKey, Integer, Relationship, SQLModel
+from sqlalchemy import Column, DateTime
+from sqlmodel import Field, ForeignKey, Integer, Relationship, SQLModel
 
 
 class Audience(SQLModel, table=True):
@@ -11,10 +12,20 @@ class Audience(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True)
     description: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    last_collection_time: Optional[datetime] = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default=None
+    )
     timeframe: str = Field(default="year")  # Options: hour, day, week, month, year, all
-    posts_per_subreddit: int = Field(default=500)  # Number of posts to fetch per subreddit
+    posts_per_subreddit: int = Field(default=300)  # Number of posts to fetch per subreddit
     is_collecting: bool = Field(default=False)  # Track if initial data collection is in progress
     collection_progress: float = Field(default=0.0)  # Track collection progress from 0 to 100
     
@@ -35,7 +46,10 @@ class AudienceSubreddit(SQLModel, table=True):
 
     audience_id: int = Field(sa_column=Column(Integer, ForeignKey("audiences.id", ondelete="CASCADE"), primary_key=True))
     subreddit_name: str = Field(foreign_key="subreddits.name", primary_key=True)
-    added_at: datetime = Field(default_factory=datetime.utcnow)
+    added_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
     # Relationships
     audience: Audience = Relationship(back_populates="subreddits")

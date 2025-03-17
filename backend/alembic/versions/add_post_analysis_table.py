@@ -9,7 +9,6 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = 'add_post_analysis_table'
@@ -22,10 +21,11 @@ def upgrade() -> None:
         'post_analysis',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('post_id', sa.Integer(), nullable=False),
-        sa.Column('matching_themes', postgresql.ARRAY(sa.String()), nullable=False),
-        sa.Column('keywords', postgresql.ARRAY(sa.String()), nullable=False),
+        sa.Column('matching_themes', sa.String(), nullable=False, server_default=''),
+        sa.Column('theme_scores', sa.String(), nullable=False, server_default='{}'),
+        sa.Column('keywords', sa.String(), nullable=False, server_default=''),
         sa.Column('analyzed_at', sa.DateTime(), nullable=False),
-        sa.ForeignKeyConstraint(['post_id'], ['redditpost.id'], ondelete='CASCADE'),
+        sa.ForeignKeyConstraint(['post_id'], ['redditposts.id'], ondelete='CASCADE'),
         sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_post_analysis_post_id'), 'post_analysis', ['post_id'], unique=True)

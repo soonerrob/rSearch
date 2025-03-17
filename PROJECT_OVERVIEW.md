@@ -17,7 +17,8 @@ This site is an audience research tool designed to gather insights about buyer i
    - Collection process starts immediately upon audience creation
    - Real-time progress tracking during collection
    - Background task scheduling with hourly updates
-   - Comment collection framework in place (future feature)
+   - Comment collection with threading support
+   - Engagement scoring and quality filtering
 
 3. **Content Analysis**
    - Organizes posts into themed categories on the audience details page
@@ -31,15 +32,17 @@ This site is an audience research tool designed to gather insights about buyer i
      - General trends and patterns
    
 4. **AI-Powered Insights**
-   - Users can ask questions about the collected data
-   - Questions are processed by OpenAI API
-   - Example: "What are the top 3 problems being discussed?"
-   - AI analyzes posts/comments to provide relevant answers
+   - Enhanced question answering using GPT-4/3.5
+   - Intelligent context preparation with threaded comments
+   - Confidence scoring based on multiple factors:
+     - Data volume and quality
+     - Engagement levels
+     - Answer comprehensiveness
+     - Question-content relevance
+   - Detailed source attribution
+   - Response caching for performance
+   - Theme-specific analysis
    - Question history tracking and persistence
-   - Theme-specific question management
-
-
-
 
 ## Technical Implementation
 
@@ -49,7 +52,11 @@ This site is an audience research tool designed to gather insights about buyer i
   - Requires manual port conflict resolution
 - AsyncPRAW for Reddit data collection
 - PostgreSQL database for data storage
-- OpenAI API integration for content analysis
+- OpenAI API integration with:
+  - GPT-4 primary model
+  - GPT-3.5-turbo fallback
+  - Intelligent context preparation
+  - Response caching
 - SQLAlchemy for database operations with:
   - Proper transaction management
   - Cascade deletions
@@ -67,7 +74,8 @@ This site is an audience research tool designed to gather insights about buyer i
   - Theme questions for tracking AI interactions
 - Posts and Comments:
   - Reddit posts with full metadata
-  - Comment structure ready for implementation
+  - Threaded comment structure
+  - Engagement scoring
   - Proper relationship management with audiences
 
 ### Frontend
@@ -75,16 +83,18 @@ This site is an audience research tool designed to gather insights about buyer i
   - Automatic fallback to port 3001 if 3000 is in use
   - Real-time updates for audience data collection
   - Interactive theme exploration
-  - Question-answer interface for AI insights
+  - Enhanced question-answer interface
   - Progress indicators for data collection
   - Error handling and user feedback
 
 ### Data Flow
 1. User creates audience → Backend initiates post collection
-2. Posts are processed and categorized into themes
-3. Themes are presented in the UI for exploration
-4. User questions trigger AI analysis of collected data
-5. Background tasks handle periodic updates
+2. Posts and comments are collected with threading
+3. Content is analyzed and categorized into themes
+4. Themes are presented in the UI for exploration
+5. User questions trigger enhanced AI analysis
+6. Cached responses improve performance
+7. Background tasks handle periodic updates
 
 ## Future Plans
 - Implement comment collection for deeper insights
@@ -109,44 +119,25 @@ This site is an audience research tool designed to gather insights about buyer i
 
 ## Recent Changes
 
-### Theme Categorization System Update (March 2024)
-1. **Post Analysis Table**
-   - Added new `post_analysis` table to store theme matches for each post
-   - Each post analysis includes:
-     - Matching themes (array of theme categories)
-     - Keywords found in the post
-     - Analysis timestamp
+### AI Analysis Enhancement (March 2024)
+1. **Model Upgrades**
+   - Added GPT-4 support
+   - Automatic fallback to GPT-3.5-turbo
+   - Improved context preparation
 
-2. **Theme Generation Process**
-   - Changed from manual settings to automated categorization
-   - Removed user configuration options (timeframe, posts_per_subreddit)
-   - Posts are now analyzed immediately upon collection
-   - Theme categories are predefined with specific criteria:
-     - Metric-based themes (Hot Discussions, Top Content)
-     - Keyword-based themes (Advice Requests, Solution Requests, etc.)
+2. **Comment Threading**
+   - Hierarchical comment organization
+   - Depth-based relevance scoring
+   - Engagement-based filtering
 
-3. **Theme Categories**
-   Standardized theme categories with specific criteria:
-   - **Metric-based Themes:**
-     - Hot Discussions: Posts with score > 10 and comments > 5
-     - Top Content: All posts, sorted by score
-   - **Keyword-based Themes:**
-     - Advice Requests: help, question, how to, beginner, etc.
-     - Solution Requests: looking for, recommend, suggestion, etc.
-     - Pain & Anger: frustrated, angry, problem, issue, etc.
-     - Money Talk: price, cost, budget, deal, etc.
-     - Self-Promotion: i made, my project, check out, etc.
-     - News: announcement, update, release, etc.
-     - Ideas: creative, inspiration, groove, pattern, etc.
-     - Opportunities: job, gig, audition, collaboration, etc.
+3. **Performance Optimization**
+   - In-memory response caching
+   - Smart context truncation
+   - Automatic cache cleanup
 
-4. **Theme Analysis Flow**
-   1. Posts are collected from subreddits
-   2. Each post is analyzed for theme matches based on:
-      - Content metrics (score, comments)
-      - Keyword presence in title and content
-   3. Theme matches are stored in post_analysis table
-   4. Themes are generated by grouping posts with matching themes
-   5. Posts can belong to multiple themes if they match multiple criteria
+4. **Enhanced Response Quality**
+   - Multi-factor confidence scoring
+   - Detailed source attribution
+   - Structured response format
 
-This update improves consistency in theme categorization and removes the need for manual configuration, while ensuring posts are properly categorized based on both engagement metrics and content analysis. 
+For detailed information about the AI service, see [AI_SERVICE.md](docs/AI_SERVICE.md). 

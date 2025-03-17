@@ -15,7 +15,7 @@ class AudienceBase(BaseModel):
 
 class AudienceCreate(AudienceBase):
     subreddit_names: List[str]
-    posts_per_subreddit: int = 500  # Default to 500 posts per subreddit
+    posts_per_subreddit: int = 300  # Default to 300 posts per subreddit
 
 class AudienceUpdate(BaseModel):
     name: Optional[str] = None

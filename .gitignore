@@ -19,11 +19,85 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+
+# Virtual Environment
 venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+backend/logs/
+logs/
+
+# Database
+*.sqlite3
+*.db
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Test files
+test_*.py
+backend/test_*.py
+backend/check_*.py
+backend/reset_*.py
+backend/start_*.py
+backend/update_*.py
+backend/delete_*.py
+backend/fix_*.py
+backend/run_tests.sh
+backend/scripts/
+
+# Backup files
+*_backup_*
+*.sql
+*.dump
+
+# Documentation drafts and plans
+*_PLAN.md
+DEBUG_*.md
+ENHANCEMENT_*.md
+
+# Alembic merge migrations
+backend/alembic/versions/*merge*.py
+backend/alembic/versions/*fix*.py
+
+# Environment files
 .env
+.env.*
+!.env.example
 
 # Node
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+
+# Coverage
+coverage/
+.coverage
+htmlcov/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Node
 .next/
 out/
 .DS_Store

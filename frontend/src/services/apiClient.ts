@@ -53,48 +53,88 @@ export class ApiClient {
       });
     }
 
-    const response = await fetch(url.toString());
-    return this.handleResponse<T>(response);
+    try {
+      const response = await fetch(url.toString());
+      return this.handleResponse<T>(response);
+    } catch (error) {
+      throw new ApiError(
+        0, // Network error has no status code
+        error instanceof Error ? error.message : 'Network error occurred',
+        { detail: 'Could not connect to server' }
+      );
+    }
   }
 
   public async post<T>(endpoint: string, data?: unknown): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: data ? JSON.stringify(data) : undefined,
-    });
-    return this.handleResponse<T>(response);
+    try {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: data ? JSON.stringify(data) : undefined,
+      });
+      return this.handleResponse<T>(response);
+    } catch (error) {
+      throw new ApiError(
+        0,
+        error instanceof Error ? error.message : 'Network error occurred',
+        { detail: 'Could not connect to server' }
+      );
+    }
   }
 
   public async put<T>(endpoint: string, data?: unknown): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: data ? JSON.stringify(data) : undefined,
-    });
-    return this.handleResponse<T>(response);
+    try {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: data ? JSON.stringify(data) : undefined,
+      });
+      return this.handleResponse<T>(response);
+    } catch (error) {
+      throw new ApiError(
+        0,
+        error instanceof Error ? error.message : 'Network error occurred',
+        { detail: 'Could not connect to server' }
+      );
+    }
   }
 
   public async delete<T>(endpoint: string): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: 'DELETE',
-    });
-    return this.handleResponse<T>(response);
+    try {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+        method: 'DELETE',
+      });
+      return this.handleResponse<T>(response);
+    } catch (error) {
+      throw new ApiError(
+        0,
+        error instanceof Error ? error.message : 'Network error occurred',
+        { detail: 'Could not connect to server' }
+      );
+    }
   }
 
   public async patch<T>(endpoint: string, data?: unknown): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${endpoint}`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: data ? JSON.stringify(data) : undefined,
-    });
-    return this.handleResponse<T>(response);
+    try {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: data ? JSON.stringify(data) : undefined,
+      });
+      return this.handleResponse<T>(response);
+    } catch (error) {
+      throw new ApiError(
+        0,
+        error instanceof Error ? error.message : 'Network error occurred',
+        { detail: 'Could not connect to server' }
+      );
+    }
   }
 }
 

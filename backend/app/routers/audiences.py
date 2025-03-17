@@ -92,7 +92,8 @@ async def create_audience(
             description=audience.description,
             timeframe=audience.timeframe,
             posts_per_subreddit=audience.posts_per_subreddit,
-            is_collecting=True
+            is_collecting=False,  # Start with is_collecting=False
+            collection_progress=0.0
         )
         
         # Add subreddits to the audience
@@ -138,6 +139,10 @@ async def create_audience(
         
         # Start background task after successful commit
         background_tasks.add_task(collect_initial_data, db_audience.id)
+        
+        # Update is_collecting to True after adding background task
+        db_audience.is_collecting = True
+        await session.commit()
         
         return AudienceWithSubreddits(
             id=db_audience.id,

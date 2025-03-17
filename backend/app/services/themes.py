@@ -1,16 +1,18 @@
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
 from app.core.logger import get_logger
 from app.models.audience import Audience, AudienceSubreddit
+from app.models.comment import Comment
 from app.models.post_analysis import PostAnalysis
 from app.models.reddit_post import RedditPost
 from app.models.theme import Theme, ThemePost
 from app.models.theme_question import ThemeQuestion
+from app.services.openai_service import analyze_theme_content
 from app.services.reddit import RedditService
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,135 +26,232 @@ class ThemeService:
         """Initialize the theme service."""
         self.db = db
         self.settings = get_settings()
-        self.reddit_service = RedditService(self.db)
+        self.reddit_service = RedditService(db=db)
         
-        # Define theme categories and their keywords
+        # Define theme categories with their criteria and keywords
         self.theme_categories = {
+            # Metric-based themes
             "Hot Discussions": {
+                "type": "metric",
                 "criteria": lambda p: p.score > 10 and p.num_comments > 5,
-                "keywords": []  # No keywords needed, based on metrics
+                "sort_key": lambda p: (p.score * 0.6 + p.num_comments * 0.4),
+                "description": "Active discussions with high engagement"
             },
             "Top Content": {
-                "criteria": lambda p: True,  # All posts eligible, sorted by score
-                "keywords": []  # No keywords needed, based on metrics
+                "type": "metric",
+                "criteria": lambda p: True,  # All posts eligible
+                "sort_key": lambda p: p.score,
+                "description": "Highest-rated content"
             },
+            # Keyword-based themes
             "Advice Requests": {
-                "keywords": ["advice", "help", "question", "how do", "how to", "need help", "beginner", "learning", "technique", "tips", "practice"]
+                "type": "keyword",
+                "keywords": ["advice", "help", "question", "how do", "how to", "need help", "beginner", "learning", "technique", "tips", "practice"],
+                "description": "Posts seeking guidance and assistance"
             },
             "Solution Requests": {
-                "keywords": ["looking for", "recommend", "suggestion", "alternative", "which", "vs", "or", "setup", "kit", "pedal", "cymbal", "snare"]
+                "type": "keyword",
+                "keywords": ["looking for", "recommend", "suggestion", "alternative", "which", "vs", "or", "setup", "kit", "pedal", "cymbal", "snare"],
+                "description": "Posts seeking specific solutions or recommendations"
             },
             "Pain & Anger": {
-                "keywords": ["frustrated", "angry", "annoyed", "hate", "problem", "issue", "broken", "noise", "loud", "neighbor", "complaint"]
+                "type": "keyword",
+                "keywords": ["frustrated", "angry", "annoyed", "hate", "problem", "issue", "broken", "noise", "loud", "neighbor", "complaint"],
+                "description": "Posts expressing frustration or problems"
             },
             "Money Talk": {
-                "keywords": ["price", "cost", "money", "paid", "expensive", "cheap", "worth", "budget", "deal", "sale", "used", "new"]
+                "type": "keyword",
+                "keywords": ["price", "cost", "money", "paid", "expensive", "cheap", "worth", "budget", "deal", "sale", "used", "new"],
+                "description": "Discussions about costs and value"
             },
             "Self-Promotion": {
-                "keywords": ["i made", "my project", "check out", "launching", "just released", "my band", "my cover", "my setup", "my kit", "nfd", "new drum day"]
+                "type": "keyword",
+                "keywords": ["i made", "my project", "check out", "launching", "just released", "my band", "my cover", "my setup", "my kit", "nfd", "new drum day"],
+                "description": "Users sharing their own content"
             },
             "News": {
-                "keywords": ["news", "announcement", "update", "release", "launched", "tour", "concert", "show", "performance", "competition"]
+                "type": "keyword",
+                "keywords": ["news", "announcement", "update", "release", "launched", "tour", "concert", "show", "performance", "competition"],
+                "description": "News and announcements"
             },
             "Ideas": {
-                "keywords": ["idea", "creative", "inspiration", "groove", "fill", "pattern", "style", "sound", "tone", "tuning"]
+                "type": "keyword",
+                "keywords": ["idea", "creative", "inspiration", "groove", "fill", "pattern", "style", "sound", "tone", "tuning"],
+                "description": "Creative and inspirational content"
             },
             "Opportunities": {
-                "keywords": ["opportunity", "job", "gig", "audition", "looking for drummer", "band", "project", "collaboration", "session", "studio"]
+                "type": "keyword",
+                "keywords": ["opportunity", "job", "gig", "audition", "looking for drummer", "band", "project", "collaboration", "session", "studio"],
+                "description": "Job and collaboration opportunities"
             }
         }
 
+    async def _ensure_db_session(self):
+        """Ensure we have a valid database session."""
+        if not self.db or not self.db.is_active:
+            self.db = AsyncSessionLocal()
+        return self.db
+
     async def collect_posts_for_audience(self, audience_id: int, is_initial_collection: bool = False) -> None:
-        """Collect posts for an audience."""
+        """Collect posts and comments for an audience."""
         try:
-            async with AsyncSessionLocal() as session:
-                try:
-                    # Get audience
-                    result = await session.execute(
-                        select(Audience).where(Audience.id == audience_id)
-                    )
-                    audience = result.scalar_one_or_none()
-                    if not audience:
-                        raise ValueError(f"Audience with id {audience_id} not found")
+            # Ensure we have a valid session
+            self.db = await self._ensure_db_session()
+            
+            # Get audience
+            result = await self.db.execute(
+                select(Audience).where(Audience.id == audience_id)
+            )
+            audience = result.scalar_one_or_none()
+            if not audience:
+                raise ValueError(f"Audience with id {audience_id} not found")
 
-                    # Mark collection as started
-                    audience.is_collecting = True
-                    audience.collection_progress = 0
-                    await session.commit()
+            # Check if already collecting
+            if audience.is_collecting:
+                logger.warning(f"Audience {audience_id} is already being collected, skipping")
+                return
 
-                    # Get subreddits for this audience
-                    result = await session.execute(
-                        select(AudienceSubreddit).where(AudienceSubreddit.audience_id == audience_id)
-                    )
-                    subreddits = result.scalars().all()
+            # Mark collection as started
+            audience.is_collecting = True
+            audience.collection_progress = 0
+            await self.db.commit()
 
-                    total_subreddits = len(subreddits)
-                    if total_subreddits == 0:
-                        raise ValueError("No subreddits found for this audience")
+            try:
+                # Get subreddits for this audience
+                result = await self.db.execute(
+                    select(AudienceSubreddit).where(AudienceSubreddit.audience_id == audience_id)
+                )
+                subreddits = result.scalars().all()
 
-                    for i, subreddit in enumerate(subreddits, 1):
-                        # Update progress
-                        audience.collection_progress = int((i / total_subreddits) * 100)
-                        await session.commit()
+                total_subreddits = len(subreddits)
+                if total_subreddits == 0:
+                    raise ValueError("No subreddits found for this audience")
 
-                        # Collect posts for this subreddit using the audience's posts_per_subreddit setting
+                for i, subreddit in enumerate(subreddits, 1):
+                    # Update progress (50% for posts, 50% for comments)
+                    audience.collection_progress = int((i / total_subreddits) * 50)
+                    await self.db.commit()
+
+                    # Determine collection parameters based on whether this is initial collection or update
+                    if is_initial_collection:
+                        # For initial collection, get all posts according to timeframe
                         posts = await self.reddit_service.get_subreddit_posts(
                             subreddit.subreddit_name,
                             limit=audience.posts_per_subreddit,
                             timeframe=audience.timeframe
                         )
+                    else:
+                        # For hourly updates, only get posts newer than last collection
+                        if audience.last_collection_time:
+                            posts = await self.reddit_service.get_subreddit_posts(
+                                subreddit.subreddit_name,
+                                limit=audience.posts_per_subreddit,
+                                timeframe="hour",  # Always use "hour" for updates
+                                min_created_at=audience.last_collection_time
+                            )
+                        else:
+                            # If no last_collection_time, treat as initial collection
+                            posts = await self.reddit_service.get_subreddit_posts(
+                                subreddit.subreddit_name,
+                                limit=audience.posts_per_subreddit,
+                                timeframe=audience.timeframe
+                            )
 
-                        # Process each post
-                        for post in posts:
+                    # Process each post and collect comments
+                    total_posts = len(posts)
+                    for post_idx, post in enumerate(posts, 1):
+                        try:
                             # Check if post exists
-                            result = await session.execute(
+                            result = await self.db.execute(
                                 select(RedditPost).where(RedditPost.reddit_id == post.reddit_id)
                             )
                             existing_post = result.scalar_one_or_none()
                             
                             if not existing_post:
                                 # Add new post
-                                session.add(post)
-                                await session.commit()
-                                await session.refresh(post)
-                                
-                                # Analyze the post
-                                await self._analyze_post(post)
+                                self.db.add(post)
+                                await self.db.commit()
+                                await self.db.refresh(post)
+                                post_to_use = post
                             else:
-                                # Update existing post, excluding the ID field
+                                # Update existing post
                                 post_dict = post.dict()
                                 post_dict.pop('id', None)  # Remove ID if present
                                 for key, value in post_dict.items():
                                     setattr(existing_post, key, value)
-                                await session.commit()
+                                await self.db.commit()
+                                post_to_use = existing_post
+                                
+                            # Collect comments for all posts
+                            try:
+                                comments = await self.reddit_service.collect_post_comments(
+                                    post_to_use.reddit_id,
+                                    max_depth=5,
+                                    min_score={
+                                        0: 1,  # Top-level comments
+                                        1: 1,  # First-level replies
+                                        2: 1,  # Second-level replies
+                                        'default': 1  # All deeper levels
+                                    }
+                                )
+                                
+                                # Set post_id for all comments
+                                for comment in comments:
+                                    comment.post_id = post_to_use.id
+                                
+                                # Bulk save comments
+                                if comments:
+                                    self.db.add_all(comments)
+                                    await self.db.commit()
+                            except Exception as e:
+                                logger.error(f"Error collecting comments for post {post_to_use.reddit_id}: {str(e)}")
+                                # Continue with next post even if comment collection fails
+                                continue
+                            
+                            # Analyze the post
+                            await self._analyze_post(post_to_use)
+                            
+                            # Update progress for this subreddit's posts
+                            post_progress = int((post_idx / total_posts) * (50 / total_subreddits))
+                            audience.collection_progress = 50 + post_progress
+                            await self.db.commit()
+                        except Exception as e:
+                            logger.error(f"Error processing post: {str(e)}")
+                            continue  # Continue with next post even if this one fails
 
-                        await session.commit()
+                # Update last_collection_time and mark collection as complete
+                audience.last_collection_time = datetime.now(timezone.utc)
+                audience.collection_progress = 100
+                audience.is_collecting = False
+                await self.db.commit()
+                
+                if is_initial_collection:
+                    # Generate themes after initial collection
+                    await self.analyze_themes(audience_id)
 
-                    # Mark collection as complete
-                    audience.collection_progress = 100
-                    audience.is_collecting = False
-                    await session.commit()
-                    
-                    if is_initial_collection:
-                        # Generate themes after initial collection
-                        await self.analyze_themes(audience_id)
-
-                except Exception as e:
-                    logger.error(f"Error collecting posts: {str(e)}")
-                    # Ensure we mark collection as complete even if there's an error
-                    async with AsyncSessionLocal() as cleanup_session:
-                        result = await cleanup_session.execute(
-                            select(Audience).where(Audience.id == audience_id)
-                        )
-                        audience = result.scalar_one_or_none()
-                        if audience:
-                            audience.is_collecting = False
-                            audience.collection_progress = 0
-                            await cleanup_session.commit()
-                    raise
+            except Exception as e:
+                # Inner try-catch to ensure we reset collection state
+                logger.error(f"Error during collection: {str(e)}")
+                audience.is_collecting = False
+                audience.collection_progress = 0
+                await self.db.commit()
+                raise
 
         except Exception as e:
-            logger.error(f"Error in collect_posts_for_audience: {str(e)}")
+            logger.error(f"Error collecting posts: {str(e)}")
+            # Ensure we mark collection as complete even if there's an error
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        select(Audience).where(Audience.id == audience_id)
+                    )
+                    audience = result.scalar_one_or_none()
+                    if audience:
+                        audience.is_collecting = False
+                        audience.collection_progress = 0
+                        await db.commit()
+            except Exception as inner_e:
+                logger.error(f"Error resetting collection state: {str(inner_e)}")
             raise
 
     async def _analyze_post(self, post: RedditPost) -> None:
@@ -170,116 +269,241 @@ class ThemeService:
         
         # Check each theme category
         for category, config in self.theme_categories.items():
-            # For metric-based themes (Hot Discussions, Top Content)
-            if "criteria" in config and config["criteria"](post):
-                matching_themes.append(category)
-            
-            # For keyword-based themes
-            if "keywords" in config and any(k in text_content for k in config["keywords"]):
-                matching_themes.append(category)
+            if config["type"] == "metric":
+                # For metric-based themes
+                if config["criteria"](post):
+                    matching_themes.append({
+                        "category": category,
+                        "score": config["sort_key"](post),
+                        "type": "metric"
+                    })
+            else:
+                # For keyword-based themes
+                matched_keywords = [k for k in config["keywords"] if k in text_content]
+                if matched_keywords:
+                    matching_themes.append({
+                        "category": category,
+                        "score": len(matched_keywords) / len(config["keywords"]),
+                        "type": "keyword",
+                        "matched_keywords": matched_keywords
+                    })
 
-        # Extract keywords (simple implementation for now)
-        keywords = []
-        for category, config in self.theme_categories.items():
-            if "keywords" in config:
-                keywords.extend([k for k in config["keywords"] if k in text_content])
-        keywords = list(set(keywords))  # Remove duplicates
+        # Extract all matched keywords
+        all_keywords = []
+        for theme in matching_themes:
+            if theme["type"] == "keyword" and "matched_keywords" in theme:
+                all_keywords.extend(theme["matched_keywords"])
+        all_keywords = list(set(all_keywords))  # Remove duplicates
+
+        # Calculate theme scores
+        theme_scores = {}
+        for theme in matching_themes:
+            base_score = theme["score"]
+            
+            # Apply theme-specific adjustments
+            if theme["category"] == "Hot Discussions":
+                # Boost score for posts with high comment/score ratio
+                comment_ratio = post.num_comments / max(post.score, 1)
+                base_score *= (1 + min(comment_ratio, 1))
+            elif theme["category"] == "Advice Requests":
+                # Boost score for longer, detailed posts
+                content_length = len(text_content)
+                base_score *= (1 + min(content_length / 1000, 0.5))
+            
+            theme_scores[theme["category"]] = min(base_score, 1.0)  # Normalize to 0-1
 
         # Store analysis
-        analysis = PostAnalysis(
-            post_id=post.id,
-            matching_themes=matching_themes,
-            keywords=keywords
-        )
+        analysis = PostAnalysis(post_id=post.id)
+        analysis.set_matching_themes([t["category"] for t in matching_themes])
+        analysis.set_theme_scores(theme_scores)
+        analysis.set_keywords(all_keywords)
+        analysis.analyzed_at = datetime.now(timezone.utc)
+        
         self.db.add(analysis)
         await self.db.commit()
 
     async def analyze_themes(self, audience_id: int) -> List[Theme]:
-        """Generate themes from analyzed posts."""
-        if not self.db:
-            raise ValueError("Database session not initialized")
-
+        """Analyze themes from posts and their comments."""
         try:
-            # Get recent posts with their analysis
+            # Get recent posts for the audience
             posts = await self._get_recent_posts(audience_id)
-            
             if not posts:
-                raise ValueError("No posts found for this audience")
+                raise ValueError("No posts found for analysis")
+
+            # Get existing post analyses
+            post_ids = [post.id for post in posts]
+            post_analyses = await self._get_post_analyses(post_ids)
             
-            # Get post analyses
-            post_ids = [p.id for p in posts]
-            result = await self.db.execute(
-                select(PostAnalysis).where(PostAnalysis.post_id.in_(post_ids))
-            )
-            analyses = result.scalars().all()
-            
-            # Create a map of post_id to analysis
-            post_analysis_map = {a.post_id: a for a in analyses}
-            
+            # Get comments for all posts
+            comments = await self._get_comments_for_posts(post_ids)
+            comments_by_post = defaultdict(list)
+            for comment in comments:
+                comments_by_post[comment.post_id].append(comment)
+
             # Group posts by themes
             theme_groups = defaultdict(list)
+            theme_scores = defaultdict(float)
+            
+            # Process each post
             for post in posts:
-                analysis = post_analysis_map.get(post.id)
-                if analysis:
-                    for theme in analysis.matching_themes:
-                        theme_groups[theme].append(post)
-            
-            # Sort "Hot Discussions" and "Top Content" by metrics
-            if "Hot Discussions" in theme_groups:
-                theme_groups["Hot Discussions"] = sorted(
-                    theme_groups["Hot Discussions"],
-                    key=lambda p: p.score + p.num_comments,
-                    reverse=True
-                )[:10]
-            
-            if "Top Content" in theme_groups:
-                theme_groups["Top Content"] = sorted(
-                    theme_groups["Top Content"],
-                    key=lambda p: p.score,
-                    reverse=True
-                )[:10]
+                post_comments = comments_by_post.get(post.id, [])
+                
+                # Calculate engagement metrics
+                engagement_score = post.score + sum(c.score for c in post_comments)
+                comment_count = len(post_comments)
+                
+                # Process metric-based themes
+                for theme_name, theme_config in self.theme_categories.items():
+                    if theme_config["type"] == "metric":
+                        if theme_config["criteria"](post):
+                            theme_groups[theme_name].append(post)
+                            theme_scores[theme_name] += theme_config["sort_key"](post)
+                    
+                    elif theme_config["type"] == "keyword":
+                        # Check post title and content for keywords
+                        content = f"{post.title} {post.content}".lower()
+                        keyword_matches = sum(1 for keyword in theme_config["keywords"] if keyword.lower() in content)
+                        
+                        # Check comments for keywords
+                        for comment in post_comments:
+                            if comment.content:
+                                comment_matches = sum(1 for keyword in theme_config["keywords"] if keyword.lower() in comment.content.lower())
+                                keyword_matches += comment_matches * 0.5  # Comments count for half
+                        
+                        if keyword_matches > 0:
+                            theme_groups[theme_name].append(post)
+                            # Score is based on keyword matches and engagement
+                            theme_scores[theme_name] += keyword_matches * (1 + (engagement_score * 0.1))
 
-            # Generate themes
-            themes = []
-            for category, posts in theme_groups.items():
-                if posts:  # Only create theme if there are matching posts
-                    theme = Theme(
-                        audience_id=audience_id,
-                        category=category,
-                        summary=self._generate_theme_summary(category, posts),
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow()
+            # Filter and sort themes
+            valid_themes = []
+            for theme_name, posts in theme_groups.items():
+                if len(posts) >= 3:  # Require at least 3 posts per theme
+                    # Sort posts within theme by engagement and relevance
+                    sorted_posts = sorted(
+                        posts,
+                        key=lambda p: (
+                            p.score + sum(c.score for c in comments_by_post.get(p.id, [])),
+                            len(comments_by_post.get(p.id, []))
+                        ),
+                        reverse=True
                     )
+                    
+                    # Create theme
+                    theme = Theme(
+                        category=theme_name,
+                        summary=self.theme_categories[theme_name]["description"],
+                        audience_id=audience_id
+                    )
+                    
+                    # Save theme first to get its ID
                     self.db.add(theme)
                     await self.db.commit()
                     await self.db.refresh(theme)
-
-                    # Create theme-post associations
-                    theme_posts = []
-                    for post in posts:
+                    
+                    # Add top posts to theme
+                    for post in sorted_posts[:10]:  # Limit to top 10 posts per theme
                         theme_post = ThemePost(
                             theme_id=theme.id,
                             post_id=post.id,
-                            relevance_score=self._calculate_relevance_score(post, category)
+                            relevance_score=post.score + sum(c.score for c in comments_by_post.get(post.id, []))
                         )
-                        theme_posts.append(theme_post)
+                        self.db.add(theme_post)
+                    await self.db.commit()
                     
-                    # Bulk insert theme posts
-                    if theme_posts:
-                        self.db.add_all(theme_posts)
-                        await self.db.commit()
-                    
-                    themes.append(theme)
-
-            if not themes:
+                    valid_themes.append(theme)
+            
+            if not valid_themes:
                 raise ValueError("No themes could be generated from the available posts")
-
-            return themes
+            
+            # Sort themes by their theme_scores
+            valid_themes.sort(key=lambda t: theme_scores[t.category], reverse=True)
+            
+            # Save themes to database using the existing session
+            for theme in valid_themes:
+                self.db.add(theme)
+            await self.db.commit()
+            
+            return valid_themes
 
         except Exception as e:
-            await self.db.rollback()
             logger.error(f"Error in analyze_themes: {str(e)}")
             raise ValueError(f"Error analyzing themes: {str(e)}")
+
+    def _calculate_relevance_score(self, post: RedditPost, category: str, comments: List[Comment]) -> float:
+        """
+        Calculate relevance score for a post in a theme category, incorporating comment data.
+        
+        Args:
+            post: The RedditPost to score
+            category: Theme category name
+            comments: List of comments for this post
+        
+        Returns:
+            Float between 0 and 1 indicating relevance
+        """
+        # Base score from post metrics
+        base_score = post.engagement_score
+        
+        # Add comment contribution
+        if comments:
+            # Calculate average comment engagement
+            avg_comment_engagement = sum(c.engagement_score for c in comments) / len(comments)
+            
+            # Weight comments more heavily for discussion-based themes
+            comment_weight = 0.6 if category in ["Hot Discussions", "Advice Requests"] else 0.4
+            
+            # Combine post and comment scores
+            combined_score = (base_score * (1 - comment_weight) + 
+                            avg_comment_engagement * comment_weight)
+        else:
+            combined_score = base_score
+        
+        # Apply theme-specific boosts
+        if category == "Hot Discussions":
+            # Boost posts with high comment engagement
+            if len(comments) > 10 and any(c.score > 50 for c in comments):
+                combined_score *= 1.2
+        
+        elif category == "Advice Requests":
+            # Boost posts where OP is active in comments
+            op_comments = [c for c in comments if c.is_submitter]
+            if op_comments:
+                op_engagement = sum(c.engagement_score for c in op_comments) / len(op_comments)
+                combined_score *= (1 + op_engagement * 0.3)
+        
+        elif category == "Pain & Anger":
+            # Boost posts with high-scoring deep discussion
+            deep_comments = [c for c in comments if c.depth > 1 and c.score > 10]
+            if deep_comments:
+                combined_score *= 1.15
+        
+        # Normalize to 0-1 range
+        return min(1.0, combined_score)
+
+    async def _generate_theme_summary(self, category: str, enhanced_posts: List[Dict]) -> str:
+        """Generate a summary for a theme category using posts and their comments."""
+        # Extract key information from posts and comments
+        total_posts = len(enhanced_posts)
+        total_comments = sum(len(p['comments']) for p in enhanced_posts)
+        avg_score = sum(p['post'].score for p in enhanced_posts) / total_posts if total_posts > 0 else 0
+        avg_comments = total_comments / total_posts if total_posts > 0 else 0
+        
+        # Get top comments for context
+        top_comments = []
+        for post in enhanced_posts:
+            top_comments.extend(post['top_comments'][:2])  # Take top 2 comments from each post
+        top_comments.sort(key=lambda c: c.engagement_score, reverse=True)
+        top_comments = top_comments[:5]  # Keep overall top 5 comments
+        
+        # TODO: Use OpenAI API to generate a more insightful summary using posts and comments
+        summary = (
+            f"Analysis of {total_posts} posts in {category} with {total_comments} comments. "
+            f"Average post score: {avg_score:.1f}, Average comments per post: {avg_comments:.1f}. "
+            f"Key discussion points from top comments: {', '.join(c.content[:100] + '...' for c in top_comments[:3])}"
+        )
+        
+        return summary
 
     async def _get_recent_posts(self, audience_id: int) -> List[RedditPost]:
         """Get recent posts for an audience."""
@@ -312,7 +536,7 @@ class ThemeService:
             # Get posts from all subreddits in the audience using proper join
             query = text("""
                 SELECT DISTINCT rp.* 
-                FROM redditpost rp
+                FROM redditposts rp
                 INNER JOIN audience_subreddits asu 
                     ON rp.subreddit_name = asu.subreddit_name 
                     AND asu.audience_id = :audience_id
@@ -345,17 +569,6 @@ class ThemeService:
         except Exception as e:
             logger.error(f"Error getting recent posts: {str(e)}")
             raise ValueError(f"Error getting recent posts: {str(e)}")
-
-    def _generate_theme_summary(self, category: str, posts: List[RedditPost]) -> str:
-        """Generate a summary for a theme category using the relevant posts."""
-        # TODO: Implement AI-powered summarization using OpenAI API
-        return f"Summary of {len(posts)} posts in {category}"
-
-    def _calculate_relevance_score(self, post: RedditPost, category: str) -> float:
-        """Calculate how relevant a post is to a theme category."""
-        # TODO: Implement more sophisticated scoring
-        base_score = post.score + post.num_comments
-        return min(1.0, base_score / 1000)  # Normalize to 0-1
 
     async def refresh_themes(self, audience_id: int) -> None:
         """Task to refresh themes for an audience."""
@@ -604,3 +817,33 @@ class ThemeService:
         except Exception as e:
             logger.error(f"Error analyzing posts: {str(e)}")
             raise 
+
+    async def _get_post_analyses(self, post_ids: List[int]) -> List[PostAnalysis]:
+        """Get post analyses for the given post IDs."""
+        if not self.db:
+            raise ValueError("Database session not initialized")
+
+        try:
+            result = await self.db.execute(
+                select(PostAnalysis).where(PostAnalysis.post_id.in_(post_ids))
+            )
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting post analyses: {str(e)}")
+            return []
+
+    async def _get_comments_for_posts(self, post_ids: List[int]) -> List[Comment]:
+        """Get comments for the given post IDs."""
+        if not self.db:
+            raise ValueError("Database session not initialized")
+
+        try:
+            result = await self.db.execute(
+                select(Comment)
+                .where(Comment.post_id.in_(post_ids))
+                .order_by(Comment.score.desc())
+            )
+            return result.scalars().all()
+        except Exception as e:
+            logger.error(f"Error getting comments: {str(e)}")
+            return [] 

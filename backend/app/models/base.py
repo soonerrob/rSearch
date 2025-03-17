@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
@@ -9,11 +9,10 @@ class TimestampedBase(SQLModel):
     __abstract__ = True
 
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        nullable=False
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column_kwargs={"server_default": "CURRENT_TIMESTAMP"}
     )
-    updated_at: Optional[datetime] = Field(
-        default_factory=datetime.utcnow,
-        nullable=True,
-        sa_column_kwargs={"onupdate": datetime.utcnow}
+    updated_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column_kwargs={"server_default": "CURRENT_TIMESTAMP", "onupdate": lambda: datetime.now(timezone.utc)}
     ) 

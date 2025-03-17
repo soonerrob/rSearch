@@ -3,10 +3,11 @@ from datetime import datetime
 from typing import List
 
 from app.core.database import get_session
-from app.models import Theme, ThemePost, ThemeQuestion
+from app.models import Comment, Theme, ThemePost, ThemeQuestion
 from app.schemas.theme_question import ThemeQuestion as ThemeQuestionSchema
 from app.schemas.theme_question import ThemeQuestionCreate
-from app.services.openai_service import analyze_posts_for_answer
+from app.services.openai_service import (analyze_posts_for_answer,
+                                         analyze_theme_content)
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
@@ -21,36 +22,65 @@ async def create_theme_question(
     db: AsyncSession = Depends(get_session)
 ) -> ThemeQuestion:
     try:
-        # Check if theme exists with eager loading of theme_posts and posts
+        # Check if theme exists with eager loading of theme_posts, posts, and comments
         result = await db.execute(
             select(Theme)
-            .options(joinedload(Theme.theme_posts).joinedload(ThemePost.post))
+            .options(
+                joinedload(Theme.theme_posts)
+                .joinedload(ThemePost.post)
+                .joinedload(RedditPost.comments)
+            )
             .where(Theme.id == question.theme_id)
         )
         theme = result.unique().scalar_one_or_none()
         if not theme:
             raise HTTPException(status_code=404, detail="Theme not found")
 
-        # Convert posts to dictionaries and limit to 20 most relevant posts
-        posts = [
-            {
-                "title": theme_post.post.title,
-                "selftext": theme_post.post.content,
-                "score": theme_post.post.score,
-                "num_comments": theme_post.post.num_comments
+        # Convert posts and comments to dictionaries
+        posts = []
+        comments = []
+        for theme_post in sorted(
+            theme.theme_posts,
+            key=lambda x: x.relevance_score,
+            reverse=True
+        )[:20]:  # Limit to 20 most relevant posts
+            post = theme_post.post
+            post_dict = {
+                "id": post.id,
+                "title": post.title,
+                "content": post.content,
+                "score": post.score,
+                "num_comments": post.num_comments,
+                "engagement_score": post.engagement_score,
+                "relevance_score": theme_post.relevance_score
             }
-            for theme_post in sorted(
-                theme.theme_posts,
-                key=lambda x: x.post.score + x.post.num_comments,
+            posts.append(post_dict)
+            
+            # Add comments for this post
+            post_comments = sorted(
+                post.comments,
+                key=lambda x: x.engagement_score,
                 reverse=True
-            )[:20]
-        ]
+            )[:10]  # Take top 10 comments per post
+            
+            for comment in post_comments:
+                comment_dict = {
+                    "id": comment.id,
+                    "post_id": post.id,
+                    "content": comment.content,
+                    "score": comment.score,
+                    "engagement_score": comment.engagement_score,
+                    "is_submitter": comment.is_submitter,
+                    "depth": comment.depth
+                }
+                comments.append(comment_dict)
 
-        # Get theme posts and generate answer
+        # Generate answer using enhanced analysis
         try:
             answer = await analyze_posts_for_answer(
                 question=question.question,
                 posts=posts,
+                comments=comments
             )
         except Exception as e:
             error_msg = str(e)
@@ -65,140 +95,101 @@ async def create_theme_question(
                 detail="Failed to generate answer. Please try again later."
             )
 
-        # Create question with answer
-        db_question = ThemeQuestion(
+        # Create and save the theme question
+        theme_question = ThemeQuestion(
             theme_id=question.theme_id,
             question=question.question,
             answer=answer,
-            created_at=datetime.utcnow(),
-            updated_at=datetime.utcnow(),
-            last_recalculated_at=datetime.utcnow()
+            created_at=datetime.utcnow()
         )
-        db.add(db_question)
+        db.add(theme_question)
         await db.commit()
-        await db.refresh(db_question)
+        await db.refresh(theme_question)
 
-        return db_question
+        return theme_question
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error creating theme question: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to create question. Please try again later."
-        )
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/theme/{theme_id}", response_model=List[ThemeQuestionSchema])
-async def get_theme_questions(theme_id: int, db: AsyncSession = Depends(get_session)):
+@router.get("/{theme_id}", response_model=List[ThemeQuestionSchema])
+async def get_theme_questions(
+    theme_id: int,
+    db: AsyncSession = Depends(get_session)
+) -> List[ThemeQuestion]:
+    """Get all questions for a theme."""
     try:
-        # Get theme first to verify it exists
-        result = await db.execute(select(Theme).where(Theme.id == theme_id))
-        theme = result.scalar_one_or_none()
-        if not theme:
-            raise HTTPException(status_code=404, detail="Theme not found")
-            
-        # Get questions for this theme, ordered by most recent first
         result = await db.execute(
             select(ThemeQuestion)
             .where(ThemeQuestion.theme_id == theme_id)
             .order_by(ThemeQuestion.created_at.desc())
         )
         questions = result.scalars().all()
-        
         return questions
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error fetching theme questions: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to fetch questions. Please try again."
-        )
+        logger.error(f"Error getting theme questions: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/{question_id}/recalculate", response_model=ThemeQuestionSchema)
-async def recalculate_answer(
-    question_id: int,
+@router.post("/{theme_id}/analyze", response_model=dict)
+async def analyze_theme(
+    theme_id: int,
     db: AsyncSession = Depends(get_session)
-) -> ThemeQuestion:
+) -> dict:
+    """Generate an AI-powered analysis of a theme's content."""
     try:
-        # Get question
-        result = await db.execute(select(ThemeQuestion).where(ThemeQuestion.id == question_id))
-        question = result.scalar_one_or_none()
-        if not question:
-            raise HTTPException(status_code=404, detail="Question not found")
-
-        # Get theme and posts with eager loading
+        # Get theme with posts and comments
         result = await db.execute(
             select(Theme)
-            .options(joinedload(Theme.theme_posts).joinedload(ThemePost.post))
-            .where(Theme.id == question.theme_id)
+            .options(
+                joinedload(Theme.theme_posts)
+                .joinedload(ThemePost.post)
+                .joinedload(RedditPost.comments)
+            )
+            .where(Theme.id == theme_id)
         )
         theme = result.unique().scalar_one_or_none()
         if not theme:
             raise HTTPException(status_code=404, detail="Theme not found")
 
-        # Convert posts to dictionaries and limit to 20 most relevant posts
-        posts = [
-            {
-                "title": theme_post.post.title,
-                "selftext": theme_post.post.content,
-                "score": theme_post.post.score,
-                "num_comments": theme_post.post.num_comments
-            }
-            for theme_post in sorted(
-                theme.theme_posts,
-                key=lambda x: x.post.score + x.post.num_comments,
-                reverse=True
-            )[:20]
-        ]
+        # Prepare posts and comments data
+        posts = []
+        comments = []
+        for theme_post in theme.theme_posts:
+            post = theme_post.post
+            posts.append({
+                "id": post.id,
+                "title": post.title,
+                "content": post.content,
+                "score": post.score,
+                "num_comments": post.num_comments,
+                "engagement_score": post.engagement_score,
+                "relevance_score": theme_post.relevance_score
+            })
+            
+            for comment in post.comments:
+                comments.append({
+                    "id": comment.id,
+                    "post_id": post.id,
+                    "content": comment.content,
+                    "score": comment.score,
+                    "engagement_score": comment.engagement_score,
+                    "is_submitter": comment.is_submitter,
+                    "depth": comment.depth
+                })
 
-        try:
-            # Generate new answer
-            answer = await analyze_posts_for_answer(
-                question=question.question,
-                posts=posts,
-            )
-        except Exception as e:
-            error_msg = str(e)
-            if "rate_limit_exceeded" in error_msg:
-                raise HTTPException(
-                    status_code=429,
-                    detail="The question is too complex for the current rate limits. Please try a more specific question or try again later."
-                )
-            logger.error(f"Error generating answer: {error_msg}")
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to generate answer. Please try again later."
-            )
-
-        # Update question
-        question.answer = answer
-        question.last_recalculated_at = datetime.utcnow()
-        question.updated_at = datetime.utcnow()
-        await db.commit()
-        await db.refresh(question)
-
-        return question
+        # Generate theme analysis
+        analysis = await analyze_theme_content(
+            theme_posts=posts,
+            theme_comments=comments,
+            category=theme.category
+        )
+        
+        return analysis
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error recalculating answer: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to recalculate answer. Please try again later."
-        )
-
-@router.delete("/{question_id}")
-async def delete_question(
-    question_id: int,
-    db: AsyncSession = Depends(get_session)
-) -> None:
-    # Get question
-    result = await db.execute(select(ThemeQuestion).where(ThemeQuestion.id == question_id))
-    question = result.scalar_one_or_none()
-    if not question:
-        raise HTTPException(status_code=404, detail="Question not found")
-
-    # Delete question
-    await db.delete(question)
-    await db.commit() 
+        logger.error(f"Error analyzing theme: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e)) 

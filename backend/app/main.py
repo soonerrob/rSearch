@@ -1,6 +1,9 @@
 import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import uvicorn
 from app.core.database import AsyncSessionLocal, init_db
@@ -14,6 +17,55 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import select
 
+# Get the absolute path to the backend directory
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+# Create logs directory if it doesn't exist
+logs_dir = BACKEND_DIR / "logs"
+logs_dir.mkdir(exist_ok=True)
+
+# Configure logging
+log_file = logs_dir / f"app_{datetime.now().strftime('%Y%m%d')}.log"
+print(f"Setting up logging to file: {log_file}")  # Debug print
+
+# Create file handler
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Create console handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.DEBUG)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Remove all existing handlers from the root logger
+root_logger = logging.getLogger()
+root_logger.handlers = []
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.DEBUG,
+    handlers=[file_handler, console_handler],
+    force=True
+)
+
+# Configure specific loggers without adding duplicate handlers
+for logger_name in ['asyncpraw', 'asyncprawcore', 'urllib3', 'app']:
+    module_logger = logging.getLogger(logger_name)
+    module_logger.setLevel(logging.DEBUG)
+    module_logger.propagate = False  # Prevent propagation to parent loggers
+    module_logger.handlers = [file_handler, console_handler]  # Set handlers directly
+
+# Create logger
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.propagate = False  # Prevent propagation to parent loggers
+
+# Log startup messages
+logger.info(f"Starting application... Log file: {log_file}")
+logger.info(f"Logs directory: {logs_dir}")
+logger.info("Logging configuration complete")
+
 # Global variable to control the background task
 should_continue_background_tasks = True
 
@@ -23,7 +75,15 @@ async def update_audience_data():
         try:
             async with AsyncSessionLocal() as db:
                 # Get all audience IDs using async session
-                result = await db.execute(select(Audience))
+                result = await db.execute(
+                    select(Audience).where(
+                        (Audience.is_collecting == False) &  # Only collect for non-collecting audiences
+                        (
+                            (Audience.last_collection_time == None) |  # Never collected
+                            (datetime.now(timezone.utc) - Audience.last_collection_time > timedelta(hours=1))  # Or collected over 1 hour ago
+                        )
+                    )
+                )
                 audience_ids = [a.id for a in result.scalars().all()]
             
                 # Process audiences one at a time
@@ -35,10 +95,10 @@ async def update_audience_data():
                     await asyncio.sleep(1)
                 
         except Exception as e:
-            print(f"Error in background task: {str(e)}")
+            logger.error(f"Error in background task: {str(e)}")
         
         # Wait for 1 hour before next update
-        print(f"Completed data collection cycle at {datetime.utcnow()}, waiting 1 hour before next update")
+        logger.info(f"Completed data collection cycle at {datetime.now(timezone.utc)}, waiting 1 hour before next update")
         await asyncio.sleep(3600)  # 3600 seconds = 1 hour
 
 @asynccontextmanager

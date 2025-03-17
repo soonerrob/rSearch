@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
+from sqlalchemy import Column, DateTime
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -13,15 +14,24 @@ class Subreddit(SQLModel, table=True):
     description: Optional[str] = None
     subscribers: int = Field(default=0)
     active_users: Optional[int] = Field(default=0)  # Number of active users
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     
     # Metrics
     posts_per_day: Optional[float] = None
     comments_per_day: Optional[float] = None
     growth_rate: Optional[float] = None
     relevance_score: Optional[float] = Field(default=0.0)  # Score for search relevance
-    last_updated: datetime = Field(default_factory=datetime.utcnow)
+    last_updated: datetime = Field(
+        sa_column=Column(DateTime(timezone=True)),
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     
     # Relationships
     audiences: List["AudienceSubreddit"] = Relationship(back_populates="subreddit")
